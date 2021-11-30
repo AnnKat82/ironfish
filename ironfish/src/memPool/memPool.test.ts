@@ -5,7 +5,10 @@ import {
   createNodeTest,
   useAccountFixture,
   useBlockWithTx,
+  useMinerBlockFixture,
   useMinersTxFixture,
+  useTxFixture,
+  useTxSpendsFixture,
 } from '../testUtilities'
 
 describe('MemPool', () => {
@@ -70,6 +73,42 @@ describe('MemPool', () => {
       const transactions = Array.from(memPool.get())
       expect(transactions).toEqual([transactionB, transactionC, transactionA])
     }, 60000)
+
+    it.only('should not get conflicting transactions', async () => {
+      const node = nodeTest.node
+      const { chain, accounts, memPool } = node
+
+      const account = await useAccountFixture(accounts)
+
+      const block = await useMinerBlockFixture(chain, 2, account, accounts)
+      await expect(chain).toAddBlock(block)
+      await node.accounts.updateHead()
+
+      const transactionA = await useTxFixture(accounts, account, account, undefined, BigInt(0))
+
+      // This allows the same notes to be respent
+      await accounts.removeTransaction(transactionA)
+
+      const transactionB = await useTxFixture(accounts, account, account, undefined, BigInt(1))
+
+      const spendsA = Array.from(transactionA.spends())
+      const spendsB = Array.from(transactionB.spends())
+
+      // Both transactionsa should spend the same thing
+      expect(spendsA[0].nullifier.toString('hex')).toEqual(spendsB[0].nullifier.toString('hex'))
+      expect(spendsA.length).toEqual(1)
+      expect(spendsB.length).toEqual(1)
+      expect(transactionA.hash().toString('hex')).not.toEqual(
+        transactionB.hash().toString('hex'),
+      )
+
+      await memPool.acceptTransaction(transactionA)
+      await memPool.acceptTransaction(transactionB)
+      expect(memPool.size).toEqual(2)
+
+      const transactions = Array.from(memPool.get())
+      expect(transactions).toEqual([transactionB])
+    })
   })
 
   describe('acceptTransaction', () => {
